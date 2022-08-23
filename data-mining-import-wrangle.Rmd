@@ -1,0 +1,634 @@
+---
+title: "Data Import and Wrangling"
+author: "Jonathan K. Regenstein"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+### Github and Projects
+
+RStudio and Github are organized around the idea of projects. I recommend to create a new project for each week of this course. Save the `Rmarkdown` file that I send over each week. Save your homework in that file. Save any notes you might take. For the next week, create a new project. 
+
+If you wish to use github to store your work, each project can be it's own repository. 
+
+Let's go through how get set up with github, then spin up a new project from a github repository. 
+
+Github will save you a lot of trouble, it is also a best practice that *should be used throughout industry but often isn't. Bringing github familiarity and best practices can be very valuable to a company.
+
+# Set up
+
+We begin Rmarkdown files with a `setup` chunk, where we can load packages, import data, set username and password. 
+
+In the below chunk we load three packages, what do they do? 
+
+```{r setup, include=FALSE}
+# load our packages for today
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(curl)
+library(lubridate)
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+https://www.tidyverse.org/
+https://readxl.tidyverse.org/
+http://sfirke.github.io/janitor/articles/janitor.html
+https://lubridate.tidyverse.org/
+
+# Macroeconomic Data from BEA: original Source
+
+Our project for today is to import change in GDP data directly from the Bureau of Economic Analysis (the BEA). GDP is reported on a quarterly basis by the BEA and consists of four sub-components: Net Exports, Consumption, Government Spending and Investment. Those four sub-components consist of several sub-sub-components, and those sub-sub-components further consist of of several components. When we analyze or discuss GDP, we are referring to the sum of these components. We could analyze those sub-components individually, for example if we were particularly interested in personal consumption and not GDP. In this session, we focus on the GDP level but the code and techniques can be directly applied at the sub-component level.
+
+## Functions covered
+
+Before we even get to the data, a word on the functions we will use today.
+
+We will intentionally import a weirdly formatted excel spreadsheet so that we can get familiar with the fundamental data wrangling functions that will stay with us throughout our careers. Those functions are:
+
+    - select() to choose columns   (dplyr package)
+    - rename() to rename columns   (dplyr package)
+    - relocate() to move columns (dplyr package)
+    - filter() to choose rows based on values   (dplyr package)   
+    - mutate() to add new columns        (dplyr package)
+    - slice()  to choose rows based on position   (dplyr package)
+    - distinct() to get unique row values         (dplyr package)
+    - arrange() tochange the order of rows (dplyr package)
+    - pivot_longer() to make data tidy and long  (tidyr package)
+    - group_by() to group data within data frames  (dplyr package)
+    - parse_date_time() to change strings to dates (lubridate pacakge)
+    - ymd() to put dates into better format (lubridate package)
+    
+### Data from BEA
+
+Since our first step is to download this data from the BEA website, the absolute number one first piece of information we need is the exact URL where the data is stored.
+
+Step 1 is to head to this URL, 
+<https://apps.bea.gov/iTable/itable.cfm?isuri=1&reqid=19&step=4&categories=flatfiles&nipa_table_list=1>, 
+which shows the following:
+
+![](images/bea-gdp-snapshot.png)
+
+The first list is `Section 1: Domestic Product and Income`. If we right click on that link, we see this image:
+
+![](images/right-click-gdp-table.png)
+
+Next click on `Copy Link Address`, navigate back over to RStudio and paste that URL into a code chunk. We will assign this to a variable called `url`.
+
+```{r}
+url <- "https://apps.bea.gov/national/Release/XLS/Survey/Section1All_xls.xlsx"
+```
+
+We just copied the exact URL where the BEA houses it's GDP data.
+
+To download the entire data set, we use the following code:
+
+```{r}
+destfile <- "Section1All_xls.xlsx"
+curl::curl_download(url, destfile)
+```
+
+But, we don't need to memorize that code. We can use the `Import Dataset` button in the top right panel to help us with data imports. This will save us hours of our lives!
+
+After we run that code snippet, we have downloaded the `Section 1` data from the BEA and it's now sitting in a location called `destfile` on our computer.
+
+However, when we look at the data importer, this spreadsheet didn't look very useful. Very often spreadsheets have more than one sheet and we need to figure out which one we want to use.
+
+Unless we already know which one we want, we can view the available sheets with the `excel_sheets()` function from the `readxl` package. We pipe the results of `excel_sheets(destfile)` to the `tibble()` function so we can store the results in a data frame.
+
+```{r}
+library(readxl)
+
+excel_sheets(destfile) %>% 
+  tibble() # is a dataframe, table, tbl, tibble
+```
+
+If that `%>%` does not look familiar, have a look [here](https://uc-r.github.io/pipe). It is called the pipe operator, and we use it to pass data to functions. By the end of this semester, you will be tired of seeing pipes, but also glad they exist.
+
+The first sheet, `10101-Q`, holds data on the quarterly change in GDP, expressed as a percentage. That tends to be the headline GDP number reported in the media so let's work with that data.
+
+
+```{r}
+read_excel(destfile, 
+           sheet = "T10101-Q"
+)
+```
+
+Hmmm, that's not exactly what we had in mind. Let's get to some wrangling.
+
+### To Wrangling
+
+This data is not perfectly formatted. We need several more steps to get this into shape.
+
+Have a look at the first 10 rows above, and notice that we don't need the first 7 rows. In fact, we don't want them. They contain meta data about when this file was created that is interesting but we don't want that to be part of our analysis. Let's add `skip = 7` to the `read_excel()` call.
+
+```{r}
+
+read_excel(destfile, 
+           sheet = "T10101-Q",
+           skip = 7) %>%
+  head()
+```
+
+That looks much better, but the first three columns have small issues. The first column is called `Line` and seems unnecessary. Let's remove it with `select(-Line)`. `select()` is from the `dplyr()` package and is used to choose columns. If we wish to remove a column called `Line`, we use the negative sign.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", skip = 7) %>% 
+  select(-Line) %>% 
+  head(10)
+```
+
+That looks better but the names of the first two columns are `...2` and `...3`. We can use the `rename()` function to give them better names. With `rename()`, we can assign new names by position or by the original name. By position means we can tell the function to rename the first column, with `rename(new_name = 1)`. By original name means we can assign new names by referring to the original name, with `rename(new_name = ...2)`. Let's use the position method, and rename the first two columns as `account` and `code`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = `...2`, code = 2) %>% 
+  head()
+```
+
+The column names are more informative now, but look closely at the columns that hold the actual percent change values and notice that `<chr>` is written underneath the column names. That tells us that the column has been read in as a `character` rather than as a `double` or something numeric. That was probably caused by the periods and negative signs. We want to change those to numeric columns.
+
+To do so, we use the `mutate()` function, which allows us to change or mutate a column.
+
+Let's change just the column called `1947Q2` to numeric. To do so, we call `mutate("1947Q2"= as.numeric('1947Q2'))`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>% 
+  mutate(`1947Q2` = as.numeric(`1947Q2`)) %>% 
+  head()
+
+
+```
+
+That worked, notice how `<dbl>` is now written under the column name. We want to convert all except the first two columns to numeric but we don't want to type out the names of each. Fortunately, we can use `across()` inside of `mutate()` to accomplish this. With `across()`, we can apply a function across multiple columns. Here we will tell `across()` to apply the `as.numeric()` function to all of our columns *except* the `account` and `code` columns. The full call is `mutate(across(c(-account, -code), as.numeric))`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>% 
+  mutate(
+    across(contains("Q"), as.numeric)
+    ) 
+```
+
+## Tidying Wide Data
+
+Have a close look at that data and notice that it looks pretty good. we can scan with our eyes and see the dates move across the columns like a time series chart. However, this data is not `tidy`. It's missing a crucial column, the `date`. Before we fix that, a brief aside on `tidy` data.
+
+`tidy` data that has three main elements.
+
+1.  Each variable forms a column.
+
+2.  Each observation forms a row.
+
+3.  Each type of observational unit forms a table.
+
+In our opinion, it is more efficient to examine this data in tidy format than to linger on the definition of tidy data.
+
+Here is our same GDP data, in tidy format:
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>% 
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, names_to = "date", values_to = "percent_change")
+```
+
+Notice how we have gone from 296 columns to 4 columns. Our data is much less wide now. At the same time, we have gone from 28 rows to 8,532 rows. Our data is longer. It is also `tidy` in the sense that we have a column for `date` and for `percent_change`. In the wide format, those two variables did not have their own column. In the wide format, there was one column for each date. 
+
+The mechanics of how we reshaped that data are very important and not very intuitive. We will describe it in words and demonstrate the code but we find the best way to get comfortable converting wide data to long, tidy data is start experimenting.
+
+With that, here's the description of what we want to do: 
+
+    + move column names (which are dates like 1947Q2) into a column called `date`
+    + move the values (the percent changes) into a new column called `percent_change`.
+
+To do this, we use the `pivot_longer()` function from `tidyr` and we set `names_to = "date"` to indicate we want to put the column names into a new column called `date`, and we set `values_to = "percent_change"` to indicate we want to put the values in a new column called `percent_change`. Note, though, we don't want to change our original columns called `account` and `code`. We want the `pivot_longer()` function to ignore those columns.
+
+Thus our full call is `pivot_longer(-account:-code, names_to = "date", values_to = "percent_change")`. For the `pivot_longer()` function, those negative signs mean to ignore the `account` and `code` columns, it does not mean to delete them.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>% 
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, #ignore these columns, negative means ignore
+               names_to = "date", # move column names to this column
+               values_to = "percent_change" # move column values to this column
+               ) 
+```
+
+Have a good look at that code, but also make sure the logic makes sense. Our new structure holds the exact same data as the BEA spreadsheet, but it's in a different (and we think better) format.
+
+## Date Wrangling
+
+We have one more important transformation to make in the `date` column. We see that it is still in the `<chr>` format, meaning it is a character column and not a `<date>` class column.
+
+There is a very useful package in R called `lubridate` that can be used to convert and work with dates. In this case, we have a difficult situation. `2020Q3` does not actually refer to a date. It refers to a time period, the third quarter of 2020. But we want to anchor that period to the first date in Q3 2020. `lubridate` has a function that will accomplish this for us, called `parse_date_time()`.
+
+We need to tell that function the format of the string that we want to parse, so we add `orders = "Yq"`. The full call is `mutate(date = parse_date_time(date, orders = "Yq"))`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>% 
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, names_to = "date", values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq")) %>% 
+  tail()
+```
+
+The `date` column is now in class `<dttm>` or date time. That is a valid date format but we prefer to move it to class `<date>`. We do that with another call to mutate and use the `ymd()` function from `lubridate`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, names_to = "date", values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>% 
+  head()
+```
+
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, names_to = "date", values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date))%>% 
+  head()
+```
+
+
+The dataframe is in good shape now. We have all the data we need and in a tidy format. Let's do a bit more clean up and review a few more functions.
+
+
+## Filter and Slice
+
+First, let's keep just the rows that are equal to `Gross domestic product` in the `account` column. We need to filter that column to just our desired values with `filter(account == "Gross domestic product")`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, names_to = "date", values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>% 
+  filter(account == "Gross domestic product")  %>% 
+  head()
+```
+
+`filter()` can be used on `<date>` and `<dbl>` columns as well. For example, suppose we wished to look at just the data for recent dates, those from "2020-01-01" onward. We would call `filter(date >= "2020-01-01")`.
+
+```{r}
+
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>% 
+  filter(percent_change < 0, 
+         account == "Gross domestic product") 
+```
+
+Another important function is `slice()`. This lets us choose which rows to keep by number. It is quite useful when combined with `group_by()`, which tells the data frame that we wish to create groups inside the data frame. Here, we probably want to treat each value in the `account` column as a separate group.
+
+If we want to view just the first and last row of each group, we call `group_by(account)` and `slice(1, n())`.
+
+```{r}
+
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>%  
+  group_by(account) %>% 
+  slice(1, n()) %>% 
+  head()
+```
+
+That's a good way to make sure we have the first and last date for each account, and a side benefit is we can notice some accounts that are not actually components of GDP, like `addendum`.
+
+Lastly, I prefer to have the most recent date at the top, meaning I want to `arrange()` the date in descending order. That necessitates a call to `arrange(desc(date))`.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>% 
+  filter(account == "Gross domestic product")  %>% 
+  arrange(desc(date)) %>% 
+  head()
+```
+
+Just a few more!
+
+Suppose we want the `date` column to be the first column, on the far left? We can use `relocate()` to change the column orders.
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>%  
+  filter(account == "Gross domestic product")  %>% 
+  arrange(desc(date)) %>% 
+  relocate(date, everything()) %>% 
+  head()
+
+```
+
+Now that we have this data in good shape, we save it as a new object, called `gdp_percent_change_from_spreadsheet`. That's a verbose name that reminds us what the data holds and where it came from - the BEA spreadsheets.
+
+```{r}
+gdp_percent_change_from_spreadsheet <- 
+ read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date)) %>%  
+  filter(account == "Gross domestic product")  %>% 
+  arrange(desc(date)) %>% 
+  relocate(date, everything()) 
+
+
+gdp_percent_change_from_spreadsheet %>% 
+  distinct(account, .keep_all = T)
+```
+
+That spreadsheet holds data on more than just topline GDP. Here are the sub accounts it holds: 
+
+```{r}
+ read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date))  %>% 
+  distinct(account, .keep_all = T)
+
+```
+
+What if we wish to compare the percent change in Personal Consumption to the change in Net Exports?
+
+First, we would `filter()` to just those two accounts:
+
+```{r}
+ read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date))  %>% 
+  filter(account %in% c("Personal consumption expenditures", "Net exports of goods and services"))
+```
+
+Then we need to restructure this data, so we can compare one account to the other. 
+
+We do this with `pivot_wider()`. 
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date))  %>% 
+  filter(account %in% c("Personal consumption expenditures", "Exports")) %>% 
+  # note we have to remove the code column. Why?
+  select(-code) %>% 
+  pivot_wider(names_from = account, values_from = percent_change)
+```
+
+Now we can use `mutate()` to create a new column that is the difference between our other account columns. 
+
+```{r}
+read_excel(destfile, sheet = "T10101-Q", 
+    skip = 7) %>% 
+  select(-1)  %>% 
+  rename(account = 1, code = 2) %>%
+  mutate(
+    across(c(-account, -code), as.numeric)
+    ) %>% 
+  pivot_longer(-account:-code, 
+               names_to = "date", 
+               values_to = "percent_change") %>% 
+  mutate(date = parse_date_time(date, orders = "Yq"),
+         date = ymd(date))  %>% 
+  filter(account %in% c("Personal consumption expenditures", "Exports")) %>% 
+  # note we have to remove the code column. Why?
+  select(-code) %>% 
+  pivot_wider(names_from = account, values_from = percent_change) %>% 
+  mutate(pce_exports_diff = `Personal consumption expenditures` - `Exports`)
+```
+
+### CSV and Zip Files
+
+Large files are often stored as zip files, which can hold more data and potentially several csv or xlsx files. It's not complicated to unzip a file with R because there is a function called `unzip()`, but there figuring out the name of the files in the zip requires a little more doing. 
+
+In this workflow we will also see how to import a csv file, and summarise a data frame. 
+
+Key Functions: 
+
+    + unzip()
+    + read_csv()
+    + summarize()
+    + mean()
+    + median()
+    + clean_names()
+
+Let's look at a zip file example and also get to know the Midas data source provided by the Securities and Exchange Commission (the SEC). After the financial crisis, the SEC started tracking and publishing a treasure trove of data on market structure, and that data is stored in zip files, by quarter.
+
+Let's start by importing data from the SEC website for the 2nd quarter of 2021. 
+
+If we navigate to the SEC website here https://www.sec.gov/opa/data/market-structure/market-structure-data-security-and-exchange.html and right click on the link labeled '2021 Q2', you can copy the link address as `https://www.sec.gov/files/opa/data/market-structure/metrics-individual-security-and-exchange/individual_security_exchange_2021_q2.zip`. That long string is the path to the zip file holding our market structure data for Q2 of 2021. We will start by downloading that zip file and extracting the CSV of market data. Then we will progress to a programmatic way to download all of the market structure data on that page using a custom-built function. 
+
+Have a close look at this string and notice that there are two unique pieces of information 
+`https://www.sec.gov/files/opa/data/market-structure/metrics-individual-security-and-exchange/individual_security_exchange_2021_q2.zip`: the year and the quarter. In this case, those are equal to `2021` and `q2`, respectively. 
+
+Let's first create variables to hold those pieces of data.
+
+```{r}
+year <- "2021"
+quarter <- "q2"
+```
+
+Now we need to combine those two variables with the rest of the string. We can use `str_glue()` since there are no spaces in this string. 
+
+```{r}
+market_structure_data_address <- 
+str_glue("https://www.sec.gov/files/opa/data/market-structure/metrics-individual-security/individual_security_{year}_{quarter}.zip")
+```
+
+And here is the string we just created. 
+
+```{r}
+market_structure_data_address
+```
+
+Nothing too mind blowing there but note that this same code paradigm can be used for any data housed on a website: 
+
+    + find the link address
+    + identify the pieces that are unique
+    + create variables for them
+    + glue them together with the non-unique portions of the string
+    + NB:the date is very often the unique piece of the string, which makes this process not too painful to repeat elsewhere. 
+
+Now that we have a web address for the zip file, we need to download it to R. 
+
+Let's first create a temporary file called `temp` so that we have a place to deposit the download.
+
+```{r}
+temp <- tempfile()
+```
+
+Next we call the `download.file()` function, supply our pasted string variable `market_structure_data_address` and point to the `temp` location. 
+
+```{r}
+download.file(
+  # location of file to be downloaded
+  market_structure_data_address,
+  # where we want R to store that file
+  temp, 
+  quiet = TRUE)
+# tempdir() will show you where this temp file is being stored
+```
+
+Next we need to create a file name, so we can tell `read_csv()` the name of the file to extract from the zip. 
+
+We will use the `quarter` and `year` variables for this as well. 
+
+
+```{r}
+unzip(temp, list = TRUE)
+
+file_name <- 
+  unzip(temp, list = TRUE) %>% 
+  slice(1) %>% 
+  pull(Name)
+```
+
+We can now import our csv file into R using `read_csv(unzip(temp, filename))`. Let's also pipe straight to `janitor::clean_names()` to clean up the column names and use a combination of `ymd()` and `parse_date_time()` to coerce the dates into a more usable format.
+
+```{r}
+q2_2021 <- 
+  read_csv(unzip(temp, file_name)) %>%
+  clean_names() %>% 
+  mutate(date = 
+           ymd(parse_date_time(date, "%Y%m%d"))
+         )
+
+q2_2021 %>% 
+  head()
+```
+
+We just imported daily market structure data for thousands of equities and ETFs. Let's use `group_by()` and `summarise(...n_distinct())` to count how many equitis versus ETFs we have.
+
+```{r}
+q2_2021 %>% 
+  group_by(security) %>%
+  summarise(distinct_tickers = n_distinct(ticker))
+```
+
+We could choose any structure metric as a good exploratory starting point. Let's suppose we're interested in order volume. 
+
+Let's find the mean and median daily order volume, for both stocks and ETFs.
+
+```{r}
+q2_2021 %>% 
+  select(date, security, ticker, order_vol_000) %>% 
+  group_by(security) %>% 
+  summarise(mean_vol = mean(order_vol_000),
+            median_vol = median(order_vol_000)) %>% 
+  group_by(security) 
+```
+
+
+
+Well, we could keep exploring this data set but let's think ahead to when we might need to do this again, or do so in a more scalable way and create a function that we can call. 
